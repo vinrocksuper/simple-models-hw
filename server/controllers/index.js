@@ -2,16 +2,23 @@
 const models = require('../models');
 
 // get the Cat model
-const { Cat } = models;
+const { Cat, Dog } = models;
 
 // default fake data so that we have something to work with until we make a real Cat
-const defaultData = {
+const defaultCatData = {
   name: 'unknown',
   bedsOwned: 0,
 };
 
+const defaultDogData = {
+  name: 'unknown',
+  breed: 'unknown',
+  age: 1,
+};
+
 // object for us to keep track of the last Cat we made and dynamically update it sometimes
-let lastAdded = new Cat(defaultData);
+let lastAddedCat = new Cat(defaultCatData);
+let lastAddedDog = new Dog(defaultDogData);
 
 // Function to handle rendering the index page.
 const hostIndex = (req, res) => {
@@ -19,7 +26,7 @@ const hostIndex = (req, res) => {
      We pass it a number of variables to populate the page.
   */
   res.render('index', {
-    currentName: lastAdded.name,
+    currentName: lastAddedCat.name,
     title: 'Home',
     pageName: 'Home Page',
   });
@@ -79,12 +86,59 @@ const hostPage2 = (req, res) => {
 };
 
 // Function to render the untemplated page3.
-const hostPage3 = (req, res) => {
+const hostPage3 = async (req, res) => {
   res.render('page3');
 };
 
+const hostPage4 = async (req, res) => {
+  try {
+    const docs = await Dog.find({}).lean().exec();
+
+    // const doggos = {
+    //   name: lastAddedDog.name,
+    //   age: lastAddedDog.age,
+    //   breed: lastAddedDog.breed,
+    // };
+
+    console.log(docs);
+    return res.render('page4', { dogs: docs });
+  } catch (err) {
+    console.log(err);
+    return res.status(500).json({ error: 'failed to find dogs' });
+  }
+};
+
 // Get name will return the name of the last added cat.
-const getName = (req, res) => res.json({ name: lastAdded.name });
+const getName = (req, res) => res.json({ name: lastAddedCat.name });
+
+const setDogName = async (req, res) => {
+  if (!req.body.firstname || !req.body.lastname || !req.body.breed || !req.body.age) {
+    // If they are missing data, send back an error.
+    return res.status(400).json({ error: 'firstname, lastname, age and breed are all required' });
+  }
+
+  const dogData = {
+    name: `${req.body.firstname} ${req.body.lastname}`,
+    age: req.body.age,
+    breed: req.body.breed,
+  };
+
+  const newDog = new Dog(dogData);
+
+  try {
+    await newDog.save();
+  } catch (err) {
+    console.log(err);
+    return res.status(500).json({ error: 'failed to create dog' });
+  }
+
+  lastAddedDog = newDog;
+  return res.json({
+    name: lastAddedDog.name,
+    age: lastAddedDog.age,
+    breed: lastAddedDog.breed,
+  });
+};
 
 // Function to create a new cat in the database
 const setName = async (req, res) => {
@@ -143,10 +197,49 @@ const setName = async (req, res) => {
      up here. We will update our lastAdded cat to the one we just added. We will then send that
      cat's data to the client.
   */
-  lastAdded = newCat;
+  lastAddedCat = newCat;
   return res.json({
-    name: lastAdded.name,
-    beds: lastAdded.bedsOwned,
+    name: lastAddedCat.name,
+    beds: lastAddedCat.bedsOwned,
+  });
+};
+
+const searchDogName = async (req, res) => {
+  if (lastAddedDog.name === 'unknown' && !req.query.name) {
+    console.log(req.query);
+    return res.status(400).json({ error: 'Name is required to perform a search' });
+  }
+
+  /* If they do give us a name to search, we will as the database for a cat with that name.
+     Remember that since we are interacting with the database, we want to wrap our code in a
+     try/catch in case the database throws an error or doesn't respond.
+  */
+  let doc;
+  try {
+    const dogName = req.query.name || lastAddedDog.name;
+    console.log(dogName);
+    doc = await Dog.findOne({ name: dogName }).exec();
+  } catch (err) {
+    // If there is an error, log it and send the user an error message.
+    console.log(err);
+    return res.status(500).json({ error: 'Something went wrong' });
+  }
+
+  // If we do not find something that matches our search, doc will be empty.
+  if (!doc) {
+    return res.json({ error: 'No dogs found' });
+  }
+  // Otherwise, we got a result and will send it back to the user.
+  return res.json({ name: doc.name, age: doc.age, breed: doc.breed });
+};
+
+const updateLastDog = (req, res) => {
+  lastAddedDog.age++;
+
+  const savePromise = lastAddedDog.save();
+
+  savePromise.then(() => {
+    searchDogName(req, res);
   });
 };
 
@@ -169,16 +262,6 @@ const searchName = async (req, res) => {
   */
   let doc;
   try {
-    /* Just like Cat.find() in hostPage1() above, Mongoose models also have a .findOne()
-       that will find a single document in the database that matches the search parameters.
-       This function is faster, as it will stop searching after it finds one document that
-       matches the parameters. The downside is you cannot get multiple responses with it.
-
-       One of three things will occur when trying to findOne in the database.
-        1) An error will be thrown, which will stop execution of the try block and move to the catch block.
-        2) Everything works, but the name was not found in the database returning an empty doc object.
-        3) Everything works, and an object matching the search is found.
-    */
     doc = await Cat.findOne({ name: req.query.name }).exec();
   } catch (err) {
     // If there is an error, log it and send the user an error message.
@@ -202,7 +285,7 @@ const searchName = async (req, res) => {
 */
 const updateLast = (req, res) => {
   // First we will update the number of bedsOwned.
-  lastAdded.bedsOwned++;
+  lastAddedCat.bedsOwned++;
 
   /* Remember that lastAdded is a Mongoose document (made on line 14 if no new
      ones were made after the server started, or line 116 if there was). Mongo
@@ -217,12 +300,12 @@ const updateLast = (req, res) => {
 
      We can use async/await for this, or just use standard promise .then().catch() syntax.
   */
-  const savePromise = lastAdded.save();
+  const savePromise = lastAddedCat.save();
 
   // If we successfully save/update them in the database, send back the cat's info.
   savePromise.then(() => res.json({
-    name: lastAdded.name,
-    beds: lastAdded.bedsOwned,
+    name: lastAddedCat.name,
+    beds: lastAddedCat.bedsOwned,
   }));
 
   // If something goes wrong saving to the database, log the error and send a message to the client.
@@ -245,9 +328,13 @@ module.exports = {
   page1: hostPage1,
   page2: hostPage2,
   page3: hostPage3,
+  page4: hostPage4,
   getName,
   setName,
   updateLast,
+  updateLastDog,
   searchName,
   notFound,
+  setDogName,
+  searchDogName,
 };
